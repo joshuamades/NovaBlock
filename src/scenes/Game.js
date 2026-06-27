@@ -12,7 +12,7 @@ const CELL_FILL_SCALE = 0.9;
 const BLOCK_FILL_SCALE = 1.08;
 const PIECE_TRAY_SCALE = 0.78;
 const PIECE_SLOT_GAP_PORTRAIT = .3;
-const PIECE_SLOT_GAP_LANDSCAPE = 0.14;
+const PIECE_SLOT_GAP_LANDSCAPE = 0.2;
 const INITIAL_BLOCK_SHAPE_COUNT = 5;
 const LINE_CLEAR_DURATION = 420;
 const LINE_PREVIEW_COLOR = 0x7f3cff;
@@ -24,6 +24,12 @@ const BLOCK_CLEAR_STAGGER = 45;
 const BLOCK_POP_DURATION = 260;
 const BLOCK_SPARK_COLOR = 0xffd24a;
 const BLOCK_SPARK_ALT_COLOR = 0xff42f7;
+const GUIDE_IDLE_DELAY = 2500;
+const GUIDE_MOVE_DURATION = 900;
+const GUIDE_HAND_SIZE_SCALE = 1.32;
+const CELL_FILL_COLOR = 0x27265e;
+const CELL_STROKE_COLOR = 0x514fa5;
+const DISABLE_LANDSCAPE_DRAG_PREVIEW = true;
 
 const BLOCK_KEYS = [
   "greenReplacement",
@@ -172,7 +178,7 @@ export class Game extends Phaser.Scene {
 
     this.boardContainer = this.add.container(0, 0).setDepth(1);
     this.boardFrame = this.add.image(0, 0, "container").setOrigin(0.5);
-    this.cellLayer = this.add.container(0, 0);
+    this.cellLayer = this.add.graphics();
     this.previewLayer = this.add.container(0, 0);
     this.blockLayer = this.add.container(0, 0);
     this.effectLayer = this.add.container(0, 0);
@@ -185,56 +191,24 @@ export class Game extends Phaser.Scene {
     ]);
 
     this.piecesContainer = this.add.container(0, 0).setDepth(20);
+    this.guideLayer = this.add.container(0, 0).setDepth(90);
     this.spawnPieces();
 
+    this.input.on("pointerdown", this.handlePlayerActivity, this);
     this.input.on("dragstart", this.handleDragStart, this);
     this.input.on("drag", this.handleDrag, this);
     this.input.on("dragend", this.handleDragEnd, this);
 
-    this.onViewportLayoutChange = () => {
-      this.applyResponsiveLayout(this.scale.gameSize);
-      if (this.viewportLayoutTimeout) {
-        window.clearTimeout(this.viewportLayoutTimeout);
-      }
-      // iOS can report final viewport metrics slightly after rotation.
-      this.viewportLayoutTimeout = window.setTimeout(() => {
-        this.applyResponsiveLayout(this.scale.gameSize);
-        this.viewportLayoutTimeout = null;
-      }, 120);
-    };
-    window.addEventListener("resize", this.onViewportLayoutChange);
-    window.addEventListener("orientationchange", this.onViewportLayoutChange);
-    if (window.visualViewport) {
-      window.visualViewport.addEventListener(
-        "resize",
-        this.onViewportLayoutChange,
-      );
-    }
-
     this.scale.on("resize", this.handleResize, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.scale.off("resize", this.handleResize, this);
+      this.input.off("pointerdown", this.handlePlayerActivity, this);
       this.input.off("dragstart", this.handleDragStart, this);
       this.input.off("drag", this.handleDrag, this);
       this.input.off("dragend", this.handleDragEnd, this);
+      this.clearGuide();
+      this.clearGuideIdleTimer();
 
-      if (this.onViewportLayoutChange) {
-        window.removeEventListener("resize", this.onViewportLayoutChange);
-        window.removeEventListener(
-          "orientationchange",
-          this.onViewportLayoutChange,
-        );
-        if (window.visualViewport) {
-          window.visualViewport.removeEventListener(
-            "resize",
-            this.onViewportLayoutChange,
-          );
-        }
-      }
-      if (this.viewportLayoutTimeout) {
-        window.clearTimeout(this.viewportLayoutTimeout);
-        this.viewportLayoutTimeout = null;
-      }
       if (this.scoreTween) {
         this.scoreTween.stop();
         this.scoreTween.remove();
@@ -244,6 +218,20 @@ export class Game extends Phaser.Scene {
 
     this.applyResponsiveLayout(this.scale.gameSize);
     this.endIfNoAvailableMoves();
+    this.showGuide();
+  }
+
+  update() {
+    if (!this.activeDragPieceView || !this.pendingDragPointer) {
+      return;
+    }
+
+    this.applyDragPosition(
+      this.activeDragPieceView,
+      this.pendingDragPointer.x,
+      this.pendingDragPointer.y,
+    );
+    this.pendingDragPointer = null;
   }
 
   resetBoard() {
@@ -291,16 +279,9 @@ export class Game extends Phaser.Scene {
   applyResponsiveLayout(gameSize) {
     const width = Math.max(gameSize?.width || this.scale.width, 1);
     const height = Math.max(gameSize?.height || this.scale.height, 1);
-    const viewportWidth = Math.max(
-      Math.round(window.visualViewport?.width || window.innerWidth || width),
-      1,
-    );
-    const viewportHeight = Math.max(
-      Math.round(window.visualViewport?.height || window.innerHeight || height),
-      1,
-    );
     const centerX = width * 0.5;
-    const isLandscape = viewportWidth > viewportHeight;
+    const isLandscape = width > height;
+    this.isLandscapeMode = isLandscape;
 
     const boardSize = Math.min(
       isLandscape ? height * 0.76 : width * 0.9,
@@ -326,6 +307,9 @@ export class Game extends Phaser.Scene {
 
     this.renderBoard();
     this.renderPieces(isLandscape, width, height);
+    if (this.guideLayer?.list?.length > 0) {
+      this.showGuide();
+    }
   }
 
   renderBoard() {
@@ -339,11 +323,14 @@ export class Game extends Phaser.Scene {
       this.boardSize * BOARD_FRAME_SCALE,
     );
 
-    this.cellLayer.removeAll(true);
+    this.cellLayer.clear();
     this.clearLinePreview();
     this.blockLayer.removeAll(true);
 
     const cellFill = Math.max(this.cellSize * CELL_FILL_SCALE, 1);
+    const strokeWidth = Math.max(this.cellSize * 0.025, 1);
+    this.cellLayer.fillStyle(CELL_FILL_COLOR, 0.72);
+    this.cellLayer.lineStyle(strokeWidth, CELL_STROKE_COLOR, 0.28);
 
     for (let row = 0; row < BOARD_SIZE; row += 1) {
       for (let col = 0; col < BOARD_SIZE; col += 1) {
@@ -357,10 +344,18 @@ export class Game extends Phaser.Scene {
           this.gridSize * 0.5 +
           row * this.cellSize +
           this.cellSize * 0.5;
-        const cell = this.add
-          .rectangle(x, y, cellFill, cellFill, 0x27265e, 0.72)
-          .setStrokeStyle(Math.max(this.cellSize * 0.025, 1), 0x514fa5, 0.28);
-        this.cellLayer.add(cell);
+        this.cellLayer.fillRect(
+          x - cellFill * 0.5,
+          y - cellFill * 0.5,
+          cellFill,
+          cellFill,
+        );
+        this.cellLayer.strokeRect(
+          x - cellFill * 0.5,
+          y - cellFill * 0.5,
+          cellFill,
+          cellFill,
+        );
 
         const blockKey = this.board[row][col];
         if (blockKey) {
@@ -418,14 +413,21 @@ export class Game extends Phaser.Scene {
       const x = (col - bounds.minCol + 0.5) * pieceCellSize;
       const y = (row - bounds.minRow + 0.5) * pieceCellSize;
       view.add(this.createBlockImage(x, y, piece.blockKey, pieceCellSize));
-
-      const dragHandle = this.add
-        .rectangle(x, y, pieceCellSize, pieceCellSize, 0x000000, 0.001)
-        .setInteractive({ useHandCursor: true });
-      dragHandle.pieceView = view;
-      this.input.setDraggable(dragHandle);
-      view.add(dragHandle);
     });
+
+    const dragHandle = this.add
+      .rectangle(
+        viewWidth * 0.5,
+        viewHeight * 0.5,
+        viewWidth,
+        viewHeight,
+        0x000000,
+        0.001,
+      )
+      .setInteractive({ useHandCursor: true });
+    dragHandle.pieceView = view;
+    this.input.setDraggable(dragHandle);
+    view.add(dragHandle);
 
     view.setSize(viewWidth, viewHeight);
 
@@ -474,6 +476,8 @@ export class Game extends Phaser.Scene {
       return;
     }
 
+    this.handlePlayerActivity();
+    this.isDraggingPiece = true;
     this.startAudioOnFirstInteraction();
     this.piecesContainer.bringToTop(pieceView);
     pieceView.setDepth(100);
@@ -484,11 +488,8 @@ export class Game extends Phaser.Scene {
     pieceView.setScale(pieceView.dragScale);
     pieceView.dragOffsetX = localPointerX * pieceView.scaleX;
     pieceView.dragOffsetY = localPointerY * pieceView.scaleY;
-    pieceView.setPosition(
-      pointer.x - pieceView.dragOffsetX,
-      pointer.y - pieceView.dragOffsetY,
-    );
-    this.updateLinePreview(pieceView);
+    this.activeDragPieceView = pieceView;
+    this.applyDragPosition(pieceView, pointer.x, pointer.y);
   }
 
   handleDrag(pointer, gameObject) {
@@ -498,11 +499,8 @@ export class Game extends Phaser.Scene {
       return;
     }
 
-    pieceView.setPosition(
-      pointer.x - pieceView.dragOffsetX,
-      pointer.y - pieceView.dragOffsetY,
-    );
-    this.updateLinePreview(pieceView);
+    this.activeDragPieceView = pieceView;
+    this.pendingDragPointer = { x: pointer.x, y: pointer.y };
   }
 
   handleDragEnd(pointer, gameObject) {
@@ -513,6 +511,10 @@ export class Game extends Phaser.Scene {
     }
 
     this.clearLinePreview();
+    this.isDraggingPiece = false;
+    this.activeDragPieceView = null;
+    this.pendingDragPointer = null;
+    this.applyDragPosition(pieceView, pointer.x, pointer.y);
     const placement = this.getPlacementFromPieceView(pieceView);
 
     if (placement && this.canPlacePiece(pieceView.piece, placement.col, placement.row)) {
@@ -526,11 +528,16 @@ export class Game extends Phaser.Scene {
         this.spawnPieces();
       }
 
+      this.pendingLayoutRefresh = false;
       this.applyResponsiveLayout(this.scale.gameSize);
       if (clearDuration > 0) {
-        this.time.delayedCall(clearDuration, () => this.endIfNoAvailableMoves());
+        this.time.delayedCall(clearDuration, () => {
+          this.endIfNoAvailableMoves();
+          this.scheduleGuideAfterIdle();
+        });
       } else {
         this.endIfNoAvailableMoves();
+        this.scheduleGuideAfterIdle();
       }
       return;
     }
@@ -547,8 +554,173 @@ export class Game extends Phaser.Scene {
       scale: pieceView.homeScale,
       duration: 180,
       ease: "Back.easeOut",
-      onComplete: () => pieceView.setDepth(0),
+      onComplete: () => {
+        pieceView.setDepth(0);
+        if (this.pendingLayoutRefresh) {
+          this.pendingLayoutRefresh = false;
+          this.applyResponsiveLayout(this.scale.gameSize);
+        }
+        this.scheduleGuideAfterIdle();
+      },
     });
+  }
+
+  applyDragPosition(pieceView, pointerX, pointerY) {
+    pieceView.setPosition(
+      pointerX - pieceView.dragOffsetX,
+      pointerY - pieceView.dragOffsetY,
+    );
+
+    if (DISABLE_LANDSCAPE_DRAG_PREVIEW && this.isLandscapeMode) {
+      return;
+    }
+
+    this.updateLinePreview(pieceView);
+  }
+
+  handlePlayerActivity() {
+    this.clearGuide();
+    this.scheduleGuideAfterIdle();
+  }
+
+  scheduleGuideAfterIdle() {
+    this.clearGuideIdleTimer();
+
+    if (this.isEnding || this.isDraggingPiece) {
+      return;
+    }
+
+    this.guideIdleTimer = this.time.delayedCall(GUIDE_IDLE_DELAY, () => {
+      if (this.isDraggingPiece) {
+        return;
+      }
+      this.showGuide();
+    });
+  }
+
+  clearGuideIdleTimer() {
+    if (this.guideIdleTimer) {
+      this.guideIdleTimer.remove(false);
+      this.guideIdleTimer = null;
+    }
+  }
+
+  showGuide() {
+    this.clearGuide();
+
+    if (this.isEnding || !this.guideLayer || !this.pieceViews?.length) {
+      return;
+    }
+
+    const suggestion = this.getGuideSuggestion();
+    if (!suggestion) {
+      return;
+    }
+
+    const { pieceView, col, row } = suggestion;
+    const bounds = pieceView.shapeBounds;
+    const targetX = this.boardLeft + col * this.cellSize;
+    const targetY = this.boardTop + row * this.cellSize;
+    const startCenterX =
+      pieceView.homeX + bounds.cols * pieceView.pieceCellSize * pieceView.homeScale * 0.5;
+    const startCenterY =
+      pieceView.homeY + bounds.rows * pieceView.pieceCellSize * pieceView.homeScale * 0.5;
+    const targetCenterX = targetX + bounds.cols * this.cellSize * 0.5;
+    const targetCenterY = targetY + bounds.rows * this.cellSize * 0.5;
+
+    const ghost = this.createGuideGhost(pieceView, pieceView.homeX, pieceView.homeY);
+    const hand = this.createGuideHand(startCenterX, startCenterY);
+
+    this.guideLayer.add([ghost, hand]);
+    this.guideTween = this.tweens.add({
+      targets: ghost,
+      x: targetX,
+      y: targetY,
+      scale: 1,
+      alpha: 0.72,
+      duration: GUIDE_MOVE_DURATION,
+      ease: "Sine.easeInOut",
+      yoyo: true,
+      repeat: -1,
+      repeatDelay: 280,
+    });
+    this.guideHandTween = this.tweens.add({
+      targets: hand,
+      x: targetCenterX,
+      y: targetCenterY,
+      scaleX: { from: hand.baseScaleX, to: hand.baseScaleX * 0.92 },
+      scaleY: { from: hand.baseScaleY, to: hand.baseScaleY * 0.92 },
+      duration: GUIDE_MOVE_DURATION,
+      ease: "Sine.easeInOut",
+      yoyo: true,
+      repeat: -1,
+      repeatDelay: 280,
+    });
+  }
+
+  clearGuide() {
+    if (this.guideTween) {
+      this.guideTween.stop();
+      this.guideTween.remove();
+      this.guideTween = null;
+    }
+    if (this.guideHandTween) {
+      this.guideHandTween.stop();
+      this.guideHandTween.remove();
+      this.guideHandTween = null;
+    }
+    if (this.guideLayer) {
+      this.guideLayer.removeAll(true);
+    }
+  }
+
+  getGuideSuggestion() {
+    const activeViews = this.pieceViews.filter((view) => view?.piece && !view.piece.placed);
+
+    for (const pieceView of activeViews) {
+      for (let row = 0; row < BOARD_SIZE; row += 1) {
+        for (let col = 0; col < BOARD_SIZE; col += 1) {
+          if (this.canPlacePiece(pieceView.piece, col, row)) {
+            return { pieceView, col, row };
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  createGuideGhost(pieceView, x, y) {
+    const ghost = this.add.container(x, y).setScale(pieceView.homeScale).setAlpha(0.82);
+
+    pieceView.piece.shape.forEach(([col, row]) => {
+      const blockX = (col - pieceView.shapeBounds.minCol + 0.5) * pieceView.pieceCellSize;
+      const blockY = (row - pieceView.shapeBounds.minRow + 0.5) * pieceView.pieceCellSize;
+      const block = this.createBlockImage(
+        blockX,
+        blockY,
+        pieceView.piece.blockKey,
+        pieceView.pieceCellSize,
+      );
+      block.setAlpha(0.76);
+      ghost.add(block);
+    });
+
+    return ghost;
+  }
+
+  createGuideHand(x, y) {
+    const handSize = Math.max(this.cellSize * GUIDE_HAND_SIZE_SCALE, 12);
+    const hand = this.add
+      .image(x, y, "handPointer")
+      .setOrigin(0.2, 0.18)
+      .setDisplaySize(handSize, handSize)
+      .setAlpha(0.95)
+      .setDepth(100);
+    hand.baseScaleX = hand.scaleX;
+    hand.baseScaleY = hand.scaleY;
+
+    return hand;
   }
 
   getPlacementFromPieceView(pieceView) {
@@ -563,12 +735,22 @@ export class Game extends Phaser.Scene {
 
   updateLinePreview(pieceView) {
     const placement = this.getPlacementFromPieceView(pieceView);
+    const placementKey = placement
+      ? `${pieceView.piece.id}:${placement.col}:${placement.row}`
+      : "none";
+
+    if (this.dragPreviewPlacementKey === placementKey) {
+      return;
+    }
+    this.dragPreviewPlacementKey = placementKey;
 
     if (
       !placement ||
       !this.canPlacePiece(pieceView.piece, placement.col, placement.row)
     ) {
-      this.clearLinePreview();
+      if (this.linePreviewKey) {
+        this.clearLinePreview();
+      }
       return;
     }
 
@@ -586,6 +768,11 @@ export class Game extends Phaser.Scene {
       return;
     }
 
+    const previewKey = `${lines.rows.join(",")}|${lines.cols.join(",")}`;
+    if (this.linePreviewKey === previewKey) {
+      return;
+    }
+    this.linePreviewKey = previewKey;
     this.previewLayer.removeAll(true);
 
     if (!lines.rows.length && !lines.cols.length) {
@@ -632,6 +819,8 @@ export class Game extends Phaser.Scene {
   }
 
   clearLinePreview() {
+    this.linePreviewKey = null;
+    this.dragPreviewPlacementKey = null;
     if (this.previewLayer) {
       this.previewLayer.removeAll(true);
     }
@@ -724,6 +913,8 @@ export class Game extends Phaser.Scene {
     }
 
     this.isEnding = true;
+    this.clearGuide();
+    this.clearGuideIdleTimer();
     this.input.enabled = false;
     this.scene.launch("EndScene");
     this.scene.bringToTop("EndScene");
@@ -955,6 +1146,10 @@ export class Game extends Phaser.Scene {
     const width = Math.max(gameSize.width || this.scale.width, 1);
     const height = Math.max(gameSize.height || this.scale.height, 1);
     this.cameras.main.setSize(width, height);
+    if (this.isDraggingPiece) {
+      this.pendingLayoutRefresh = true;
+      return;
+    }
     this.applyResponsiveLayout({ width, height });
   }
 

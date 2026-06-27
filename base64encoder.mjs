@@ -75,6 +75,7 @@ function getMimeType(ext) {
     jpg: 'image/jpeg',
     jpeg: 'image/jpeg',
     gif: 'image/gif',
+    webp: 'image/webp',
     svg: 'image/svg+xml',
     json: 'application/json',
     atlas: 'text/plain',

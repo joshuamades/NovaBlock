@@ -12,6 +12,10 @@
             background-repeat: repeat;
             background-color: #181745;
             background-size: 80px;
+            overflow: hidden;
+            overscroll-behavior: none;
+            touch-action: none;
+            user-select: none;
         }
 
         #app {
@@ -21,9 +25,19 @@
             display: flex;
             justify-content: center;
             align-items: center;
+            touch-action: none;
+            user-select: none;
+        }
+
+        #ad-container,
+        canvas {
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-touch-callout: none;
         }
     </style>
-    <title>Phaser - Playable Template</title>
+    <title>NovaBlock</title>
 </head>
 <body>
     <div id="app">

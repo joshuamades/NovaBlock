@@ -8,16 +8,21 @@ import { Preloader } from "./scenes/Preloader";
 import { config } from "./config.js";
 import { EndScene } from "./scenes/EndScene.js";
 
+const PORTRAIT_LOGICAL_WIDTH = 540;
+const LANDSCAPE_LOGICAL_WIDTH = 960;
+
 const gameConfig = {
-  type: Phaser.AUTO,
+  type: Phaser.WEBGL,
   parent: "ad-container",
-  width: 1080,
-  height: 1920,
-  backgroundColor: "transparent",
-  transparent: true,
+  width: PORTRAIT_LOGICAL_WIDTH,
+  height: 960,
+  backgroundColor: "#181745",
+  transparent: false,
+  antialias: false,
+  roundPixels: true,
+  powerPreference: "high-performance",
   scale: {
-    mode: Phaser.Scale.EXPAND,
-    autoCenter: Phaser.Scale.CENTER_BOTH,
+    mode: Phaser.Scale.NONE,
   },
   scene: [Preloader, Game, EndScene],
 };
@@ -28,6 +33,8 @@ function initializePhaserGame() {
 
 function bindResponsiveResize(game) {
   const shouldRunDelayedResize = isIpadScreen();
+  let isPointerActive = false;
+  let pendingResize = false;
 
   const getViewportSize = () => {
     if (window.visualViewport) {
@@ -47,7 +54,18 @@ function bindResponsiveResize(game) {
     if (!game.isBooted || !game.canvas) {
       return;
     }
+    if (isPointerActive) {
+      pendingResize = true;
+      return;
+    }
+
     const { width, height } = getViewportSize();
+    const aspect = width / height;
+    const isLandscape = width > height;
+    const renderWidth = isLandscape
+      ? LANDSCAPE_LOGICAL_WIDTH
+      : PORTRAIT_LOGICAL_WIDTH;
+    const renderHeight = Math.max(Math.round(renderWidth / aspect), 1);
     const container = document.getElementById("ad-container");
     const app = document.getElementById("app");
 
@@ -60,12 +78,18 @@ function bindResponsiveResize(game) {
       app.style.height = `${height}px`;
     }
 
-    game.scale.resize(width, height);
-    game.scale.refresh();
+    game.scale.resize(renderWidth, renderHeight);
+    game.canvas.style.width = `${width}px`;
+    game.canvas.style.height = `${height}px`;
   };
 
   let rafId = null;
   const scheduleResize = () => {
+    if (isPointerActive) {
+      pendingResize = true;
+      return;
+    }
+
     if (rafId) {
       cancelAnimationFrame(rafId);
     }
@@ -77,13 +101,31 @@ function bindResponsiveResize(game) {
       }
     });
   };
+  const startPointerActivity = () => {
+    isPointerActive = true;
+  };
+  const finishPointerActivity = () => {
+    isPointerActive = false;
+    if (pendingResize) {
+      pendingResize = false;
+      scheduleResize();
+    }
+  };
 
+  window.addEventListener("pointerdown", startPointerActivity, { passive: true });
+  window.addEventListener("pointerup", finishPointerActivity, { passive: true });
+  window.addEventListener("pointercancel", finishPointerActivity, { passive: true });
+  window.addEventListener("blur", finishPointerActivity);
   window.addEventListener("resize", scheduleResize);
   window.addEventListener("orientationchange", scheduleResize);
   if (window.visualViewport) {
     window.visualViewport.addEventListener("resize", scheduleResize);
   }
   game.events.once("destroy", () => {
+    window.removeEventListener("pointerdown", startPointerActivity);
+    window.removeEventListener("pointerup", finishPointerActivity);
+    window.removeEventListener("pointercancel", finishPointerActivity);
+    window.removeEventListener("blur", finishPointerActivity);
     window.removeEventListener("resize", scheduleResize);
     window.removeEventListener("orientationchange", scheduleResize);
     if (window.visualViewport) {
