@@ -1,0 +1,30 @@
+{
+  "name": "playable-template",
+  "version": "1.4.0",
+  "description": "A Phaser 3 Template for Playable Ads",
+  "main": "src/main.js",
+  "private": true,
+  "scripts": {
+    "base64": "node base64encoder.mjs",
+    "dev": "vite --config vite/config.dev.mjs",
+    "build:all": "node build-all-networks.js",
+    "build:split": "vite build --config vite/config-split.prod.mjs",
+    "build:inline": "vite build --config vite/config-inline.prod.mjs"
+  },
+  "author": "Phaser Studio <support@phaser.io> (https://phaser.io/)",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@originjs/vite-plugin-content": "^1.0.5",
+    "enquirer": "^2.4.1",
+    "vite": "^6.0.5",
+    "vite-plugin-string": "^1.2.3"
+  },
+  "devDependencies": {
+    "phaser": "^3.88.2",
+    "terser": "^5.37.0",
+    "vite-plugin-html": "^3.2.2",
+    "vite-plugin-html-injection": "^1.4.2",
+    "vite-plugin-singlefile": "^2.1.0",
+    "vite-plugin-zip-pack": "^1.2.4"
+  }
+}

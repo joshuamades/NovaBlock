@@ -1,0 +1,5 @@
+This is an ESM build of Phaser 3.87 with the following features REMOVED:
+
+Arcade Physics
+Matter Physics
+Tilemaps

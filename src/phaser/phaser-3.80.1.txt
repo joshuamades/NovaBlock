@@ -1,0 +1,7 @@
+This version of Phaser was created with Phaser Compressor and has the following things REMOVED from it:
+
+Arcade Physics
+Matter Physics
+Tilemaps
+Gamepad Support
+Mesh, Plane, PointLight and Lights Game Objects
